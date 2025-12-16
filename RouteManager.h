@@ -1,83 +1,46 @@
-#ifndef ROUTE_MANAGER_H
+
 #define ROUTE_MANAGER_H
 
-#include <iostream>
-using namespace std;
+#include "StopManager.h"
 
 struct Route {
-    int routeId;
-    int* stops;      // array of stop IDs
-    int stopCount;
+    int routeID;
+    string startStop;
+    string endStop;
+    int distance;
+    int time;
+    Route* next;
+};
 
-    Route() : routeId(-1), stops(nullptr), stopCount(0) {}
-    Route(int id, int* stopArray, int count) : routeId(id), stopCount(count) {
-        stops = new int[count];
-        for (int i = 0; i < count; i++) stops[i] = stopArray[i];
-    }
+class RouteHashTable {
+private:
+    static const int SIZE = 20;
+    Route* table[SIZE];
 
-    ~Route() { delete[] stops; }
+    int hashFunction(int key);
+
+public:
+    RouteHashTable();
+
+    void insert(Route* r);
+    Route* search(int routeID);
+    void remove(int routeID);
 };
 
 class RouteManager {
 private:
-    Route* routes;
-    int capacity;
-    int count;
-
-    void resize() {
-        int newCap = capacity * 2;
-        Route* temp = new Route[newCap];
-        for (int i = 0; i < count; i++)
-            temp[i] = routes[i];
-        delete[] routes;
-        routes = temp;
-        capacity = newCap;
-    }
+    Route* head;
+    RouteHashTable routeTable;
+    StopManager* stopManager;
 
 public:
-    RouteManager(int cap = 10) {
-        capacity = cap;
-        count = 0;
-        routes = new Route[capacity];
-    }
+    RouteManager(StopManager* sm);
 
-    ~RouteManager() { delete[] routes; }
+    void addRoute(int id, string start, string end, int dist, int time);
+    void removeRoute(int id);
 
-    bool addRoute(int routeId, int* stopList, int stopCount) {
-        for (int i = 0; i < count; i++)
-            if (routes[i].routeId == routeId) return false; // duplicate
-
-        if (count == capacity) resize();
-        routes[count++] = Route(routeId, stopList, stopCount);
-        return true;
-    }
-
-    bool removeRoute(int routeId) {
-        int idx = -1;
-        for (int i = 0; i < count; i++)
-            if (routes[i].routeId == routeId) { idx = i; break; }
-        if (idx == -1) return false;
-
-        for (int i = idx; i < count - 1; i++)
-            routes[i] = routes[i + 1];
-        count--;
-        return true;
-    }
-
-    Route* findRoute(int routeId) {
-        for (int i = 0; i < count; i++)
-            if (routes[i].routeId == routeId) return &routes[i];
-        return nullptr;
-    }
-
-    void printRoutes() const {
-        for (int i = 0; i < count; i++) {
-            cout << "Route ID: " << routes[i].routeId << " | Stops: ";
-            for (int j = 0; j < routes[i].stopCount; j++)
-                cout << routes[i].stops[j] << " ";
-            cout << endl;
-        }
-    }
+    Route* getAllRoutes();      // mem 2 & 4
+    Route* getRouteByID(int id);
 };
 
 #endif
