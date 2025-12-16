@@ -1,4 +1,4 @@
-
+#ifndef STOP_MANAGER_H
 #define STOP_MANAGER_H
 
 #include <iostream>
