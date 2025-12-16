@@ -7,7 +7,7 @@ using namespace std;
 
 struct Stop {
     string name;
-    int connectivityCount;    // Used by Member 3
+    int connectivityCount;    // mem 3
     Stop* next;
 };
 
@@ -22,7 +22,7 @@ public:
     void addStop(string name);
     void removeStop(string name);
 
-    Stop* getAllStops();  // Used by Members 2, 3, 4
+    Stop* getAllStops();  // mem 2, 3, 4
 };
 
 #endif
