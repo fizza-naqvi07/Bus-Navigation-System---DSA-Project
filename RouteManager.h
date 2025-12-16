@@ -1,4 +1,4 @@
-
+#ifndef ROUTE_MANAGER_H
 #define ROUTE_MANAGER_H
 
 #include "StopManager.h"
