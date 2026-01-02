@@ -1,100 +1,772 @@
-#include "BusNav.h"
+long long opsDijkstra = 0;
+long long opsDFS = 0;
+long long opsMerge = 0;
+long long opsQuick = 0;
+long long opsLinear = 0;
+long long opsBFS = 0;
 
-void clearScreen() {
-    for(int i = 0; i < 40; i++) cout << endl;
-}
+#include <iostream>
+#include <iomanip>
+#include <chrono>
+#include <cstring>
 
-void loadDataset(BusSystem& s) {
-    for (int i = 0; i < 100; i++) {
-        char name[10] = {'S', 't', 'p', (char)(i / 10 + '0'), (char)(i % 10 + '0'), '\0'};
-        s.addStop(i, name);
+using namespace std;
+using namespace std::chrono;
+
+struct Route
+{
+    int id, src, dest;
+    double dist, time;
+    int popularity;
+    Route *next;
+};
+
+struct Stop
+{
+    int id;
+    char name[50];
+    Route *head;
+};
+
+struct StackNode
+{
+    int id, type;
+    StackNode *next;
+};
+
+class Stack
+{
+    StackNode *top;
+
+public:
+    Stack() : top(0) {}
+    void push(int id, int t) { top = new StackNode{id, t, top}; }
+    bool pop(int &id, int &t)
+    {
+        if (!top)
+            return false;
+        id = top->id;
+        t = top->type;
+        StackNode *x = top;
+        top = top->next;
+        delete x;
+        return true;
     }
-    for (int i = 0; i < 500; i++) {
-        s.addRoute(1000 + i, i % 100, (i + 7) % 100, 4.0 + (i % 8), 12.0 + (i % 12), false);
+};
+
+struct QNode
+{
+    int s, d;
+    QNode *next;
+};
+
+class Queue
+{
+    QNode *f, *r;
+
+public:
+    Queue() : f(0), r(0) {}
+    void enqueue(int s, int d)
+    {
+        QNode *n = new QNode{s, d, 0};
+        if (!r)
+            f = r = n;
+        else
+            r->next = n, r = n;
     }
-}
+    bool dequeue(int &s, int &d)
+    {
+        if (!f)
+            return false;
+        s = f->s;
+        d = f->d;
+        QNode *t = f;
+        f = f->next;
+        if (!f)
+            r = 0;
+        delete t;
+        return true;
+    }
+};
 
-bool login() {
-    char user[20], pass[20];
-    cout << "\n--- ADMINISTRATIVE ACCESS CONTROL ---\n";
-    cout << "Employee Username: "; cin >> user;
-    cout << "Security Password: "; cin >> pass;
-    if (user[0]=='a' && user[1]=='d' && pass[0]=='a' && pass[1]=='d') return true;
-    return false;
-}
+struct HeapNode
+{
+    int v;
+    double w;
+};
 
-int main() {
-    BusSystem sys(128);
-    loadDataset(sys);
-    int role;
+class MinHeap
+{
+    HeapNode *a;
+    int sz, cap;
 
-    while (true) {
-        cout << "\n============================================\n";
-        cout << "      BUSNAV: ENTERPRISE TRANSIT SYSTEM     \n";
-        cout << "============================================\n";
-        cout << "Select Access Level:\n";
-        cout << "1. Commuter Portal (Public Access)\n";
-        cout << "2. System Administrator (Secure Access)\n";
-        cout << "3. Terminate Application\n";
-        cout << "Response >> "; cin >> role;
+public:
+    long long ops;
+    MinHeap(int c) : sz(0), cap(c), ops(0) { a = new HeapNode[c]; }
+    ~MinHeap() { delete[] a; }
+    bool empty() { return sz == 0; }
+    void push(int v, double w)
+    {
+        ops++;
+        int i = sz++;
+        a[i] = {v, w};
+        while (i && a[(i - 1) / 2].w > a[i].w)
+        {
+            ops++;
+            HeapNode t = a[i];
+            a[i] = a[(i - 1) / 2];
+            a[(i - 1) / 2] = t;
+            i = (i - 1) / 2;
+        }
+    }
+    HeapNode pop()
+    {
+        ops++;
+        HeapNode r = a[0];
+        a[0] = a[--sz];
+        int i = 0;
+        while (i * 2 + 1 < sz)
+        {
+            int j = i * 2 + 1;
+            if (j + 1 < sz && a[j + 1].w < a[j].w)
+                j++;
+            if (a[i].w <= a[j].w)
+                break;
+            HeapNode t = a[i];
+            a[i] = a[j];
+            a[j] = t;
+            i = j;
+        }
+        return r;
+    }
+};
 
-        if (role == 3) break;
-        clearScreen();
+class BusSystem
+{
+    Stop *stops;
+    int cap;
+    Stack undoS, redoS;
+    Queue req;
 
-        if (role == 1) {
-            int ch;
-            while (true) {
-                cout << "\n--- COMMUTER NAVIGATION INTERFACE ---\n";
-                cout << "1. Calculate Shortest Path (Distance-Optimized)\n";
-                cout << "2. Calculate Fastest Path (Time-Optimized)\n";
-                cout << "3. Log Formal Route Connection Request\n";
-                cout << "4. Sign Out to Main Menu\n";
-                cout << "Choice >> "; cin >> ch;
-                if (ch == 4) break;
-                int u, v;
-                if (ch == 1 || ch == 2) {
-                    cout << "Origin Terminal ID: "; cin >> u; 
-                    cout << "Destination Terminal ID: "; cin >> v;
-                    sys.dijkstra(u, v, (ch == 1));
-                } else if (ch == 3) {
-                    cout << "Requested Origin ID: "; cin >> u; 
-                    cout << "Requested Destination ID: "; cin >> v;
-                    sys.queueReq(u, v); 
-                    cout << "[Notification] Your request has been logged in the processing queue.\n";
+    Route *merge(Route *a, Route *b, int c)
+    {
+        opsMerge++;
+        if (!a)
+            return b;
+        if (!b)
+            return a;
+        opsMerge++;
+        bool ok = (c == 1 ? a->id <= b->id : (c == 2 ? a->dist <= b->dist : a->popularity >= b->popularity));
+        if (ok)
+        {
+            a->next = merge(a->next, b, c);
+            return a;
+        }
+        b->next = merge(a, b->next, c);
+        return b;
+    }
+    void split(Route *s, Route **f, Route **b)
+    {
+        Route *fast = s->next, *slow = s;
+        while (fast)
+        {
+            fast = fast->next;
+            if (fast)
+            {
+                slow = slow->next;
+                fast = fast->next;
+            }
+        }
+        *f = s;
+        *b = slow->next;
+        slow->next = 0;
+    }
+    Route *mergeSort(Route *h, int c)
+    {
+        if (!h || !h->next)
+            return h;
+        Route *a, *b;
+        split(h, &a, &b);
+        return merge(mergeSort(a, c), mergeSort(b, c), c);
+    }
+    Route *quickSort(Route *h, int c)
+    {
+        opsQuick++;
+        if (!h || !h->next)
+            return h;
+        Route *p = h, *l = 0, *r = 0;
+        Route *curr = h->next;
+        while (curr)
+        {
+            Route *x = curr;
+            curr = curr->next;
+            
+            opsQuick++;
+            bool ok = (c == 2 ? x->dist < p->dist : x->popularity > p->popularity);
+            if (ok)
+            {
+                x->next = l;
+                l = x;
+            }
+            else
+            {
+                x->next = r;
+                r = x;
+            }
+        }
+        l = quickSort(l, c);
+        r = quickSort(r, c);
+        Route *t = l;
+        if (!t)
+        {
+            p->next = r;
+            return p;
+        }
+        while (t->next)
+            t = t->next;
+        t->next = p;
+        p->next = r;
+        return l;
+    }
+    struct PathInfo { int *nodes; int len; double dist; double time; int popularity; PathInfo *next; };
+
+    void addPathResult(PathInfo *&res, int *path, int plen, double cd, double ct, int cp)
+    {
+        PathInfo *p = new PathInfo;
+        p->len = plen;
+        p->nodes = new int[plen];
+        for (int i = 0; i < plen; i++) p->nodes[i] = path[i];
+        p->dist = cd;
+        p->time = ct;
+        p->popularity = cp;
+        p->next = res;
+        res = p;
+    }
+
+    void dfsCollect(int u, int d, bool *vis, int *path, int plen, double cd, double ct, int cp, PathInfo *&res)
+    {
+        opsDFS++;
+        vis[u] = 1;
+        path[plen++] = u;
+        if (u == d)
+        {
+            addPathResult(res, path, plen, cd, ct, cp);
+        }
+        else
+        {
+            for (Route *e = stops[u].head; e; e = e->next)
+                if (!vis[e->dest])
+                    dfsCollect(e->dest, d, vis, path, plen, cd + e->dist, ct + e->time, cp + e->popularity, res);
+        }
+        plen--;
+        vis[u] = 0;
+    }
+    void bfs(int s)
+    {
+        bool *vis = new bool[cap];
+        for (int i = 0; i < cap; i++)
+            vis[i] = 0;
+        Queue q;
+        q.enqueue(s, s);
+        vis[s] = 1;
+        int ts, td;
+        while (q.dequeue(ts, td))
+        {
+            opsBFS++;
+            for (Route *e = stops[ts].head; e; e = e->next)
+            {
+                if (!vis[e->dest])
+                {
+                    vis[e->dest] = 1;
+                    q.enqueue(e->dest, e->dest);
                 }
             }
-        } 
-        else if (role == 2) {
-            if (login()) {
-                int ch;
-                while (true) {
-                    cout << "\n--- ADMINISTRATIVE DASHBOARD ---\n";
-                    cout << "1. Process Commuter Route Requests (FIFO)\n";
-                    cout << "2. Append Manual Route Entry to Network\n";
-                    cout << "3. Generate Global Connectivity Report (Table)\n";
-                    cout << "4. Revert Last Transaction (Stack-Based Undo)\n";
-                    cout << "5. System Log-Off\n";
-                    cout << "Choice >> "; cin >> ch;
-                    if (ch == 5) break;
-                    switch (ch) {
-                        case 1: sys.process(); break;
-                        case 2: {
-                            int id, u, v; double d, t;
-                            cout << "Enter Unique Route ID: "; cin >> id;
-                            cout << "Origin ID: "; cin >> u;
-                            cout << "Destination ID: "; cin >> v;
-                            cout << "Distance (km): "; cin >> d;
-                            cout << "Est. Time (min): "; cin >> t;
-                            sys.addRoute(id, u, v, d, t); 
-                            cout << "[Update] Network registry updated with new route entry.\n";
-                            break;
-                        }
-                        case 3: sys.displayTable(); break;
-                        case 4: sys.performUndo(); break;
-                    }
+        }
+        delete[] vis;
+    }
+
+public:
+    BusSystem(int c) : cap(c)
+    {
+        stops = new Stop[cap];
+        for (int i = 0; i < cap; i++)
+        {
+            stops[i].id = i;
+            stops[i].head = 0;
+        }
+    }
+
+    void rankRoutes(int crit, bool useQuick, int startID, int endID);
+
+    void addStop(int id, const char *n)
+    {
+        int i = 0;
+        for (; n[i] && i < 49; i++)
+            stops[id].name[i] = n[i];
+        stops[id].name[i] = '\0';
+    }
+    void addRoute(int id, int u, int v, double d, double t, bool log = 1)
+    {
+        Route *r = new Route{id, u, v, d, t, 0, stops[u].head};
+        stops[u].head = r;
+        if (log)
+            undoS.push(id, 1);
+    }
+    void removeRoute(int id, bool log = 1)
+    {
+        for (int i = 0; i < cap; i++)
+        {
+            Route *c = stops[i].head, *p = 0;
+            while (c)
+            {
+                if (c->id == id)
+                {
+                    if (p)
+                        p->next = c->next;
+                    else
+                        stops[i].head = c->next;
+                    if (log)
+                        undoS.push(id, 2);
+                    delete c;
+                    return;
                 }
-            } else {
-                cout << "\n[Access Denied] Invalid Credentials Provided.\n";
+                p = c;
+                c = c->next;
+            }
+        }
+    }
+    void undo()
+    {
+        int id, t;
+        if (!undoS.pop(id, t))
+            return;
+        if (t == 1)
+            removeRoute(id, 0);
+        else
+            redoS.push(id, t);
+    }
+    void redo()
+    {
+        int id, t;
+        if (!redoS.pop(id, t))
+            return;
+        if (t == 2)
+            addRoute(id, id % cap, (id + 7) % cap, 5, 10, 0);
+    }
+    void linearShortest(int s, int d, bool silent = false)
+    {
+        opsLinear = 0;
+        int cur = s;
+        double cost = 0;
+        bool vis[200] = {0};
+        int safety = 0;
+        while (cur != d && safety < 100)
+        {
+            vis[cur] = 1;
+            Route *best = 0;
+            for (Route *e = stops[cur].head; e; e = e->next)
+            {
+                opsLinear++;
+                if (!vis[e->dest] && (!best || e->dist < best->dist))
+                    best = e;
+            }
+            if (!best)
+                break;
+            best->popularity++;
+            cost += best->dist;
+            cur = best->dest;
+            safety++;
+        }
+        if(!silent) cout << "Cost: " << cost << endl;
+    }
+    void dijkstra(int s, int d, bool silent = false)
+    {
+        opsDijkstra = 0;
+        double *dist = new double[cap];
+        int *par = new int[cap];
+        for (int i = 0; i < cap; i++)
+        {
+            dist[i] = 1e9;
+            par[i] = -1;
+        }
+        MinHeap pq(cap * 5);
+        dist[s] = 0;
+        pq.push(s, 0);
+        while (!pq.empty())
+        {
+            opsDijkstra++;
+            HeapNode h = pq.pop();
+            opsDijkstra++;
+            if (h.w > dist[h.v])
+                continue;
+            for (Route *e = stops[h.v].head; e; e = e->next)
+            {
+                opsDijkstra++;
+                if (dist[h.v] + e->dist < dist[e->dest])
+                {
+                    dist[e->dest] = dist[h.v] + e->dist;
+                    par[e->dest] = h.v;
+                    e->popularity++;
+                    pq.push(e->dest, dist[e->dest]);
+                }
+            }
+        }
+        if(!silent) cout << "Cost: " << dist[d] << endl;
+        delete[] dist;
+        delete[] par;
+    }
+    void discover(int s, int d)
+    {
+        bool *vis = new bool[cap];
+        for (int i = 0; i < cap; i++) vis[i] = 0;
+        int *path = new int[cap];
+        PathInfo *res = 0;
+        dfsCollect(s, d, vis, path, 0, 0.0, 0.0, 0, res);
+        if (!res)
+            cout << "No routes found between " << stops[s].name << " and " << stops[d].name << endl;
+        else
+        {
+            cout << "\nAll Possible Routes:\n";
+            cout << left << setw(6) << "#" << setw(40) << "Stops Sequence" << setw(12) << "Dist" << setw(12) << "Time" << setw(12) << "Popularity" << endl;
+            int idx = 1;
+            for (PathInfo *p = res; p; p = p->next)
+            {
+                cout << left << setw(6) << idx;
+                char seq[512]; seq[0] = '\0';
+                for (int j = 0; j < p->len; j++)
+                {
+                    if (j) strcat(seq, " -> ");
+                    strcat(seq, stops[p->nodes[j]].name);
+                }
+                cout << setw(40) << seq << setw(12) << p->dist << setw(12) << p->time << setw(12) << p->popularity << endl;
+                idx++;
+            }
+        }
+        for (PathInfo *p = res; p; ) { PathInfo *t = p; p = p->next; delete[] t->nodes; delete t; }
+        delete[] vis;
+        delete[] path;
+    }
+
+    void discoverSilent(int s, int d)
+    {
+        bool *vis = new bool[cap];
+        for (int i = 0; i < cap; i++) vis[i] = 0;
+        int *path = new int[cap];
+        PathInfo *res = 0;
+        dfsCollect(s, d, vis, path, 0, 0.0, 0.0, 0, res);
+        for (PathInfo *p = res; p; ) { PathInfo *t = p; p = p->next; delete[] t->nodes; delete t; }
+        delete[] vis;
+        delete[] path;
+    }
+    void reachability(int s)
+    {
+        cout << "\nRoutes connected to Stop " << s << " (" << stops[s].name << "):\n";
+        cout << left << setw(10) << "DestID" << setw(20) << "DestName" << setw(12) << "Dist" << setw(10) << "Time" << endl;
+        bool found = false;
+        for (Route *e = stops[s].head; e; e = e->next)
+        {
+            cout << left << setw(10) << e->dest << setw(20) << stops[e->dest].name << setw(12) << e->dist << setw(10) << e->time << endl;
+            found = true;
+        }
+        if (!found) cout << "No outgoing routes found from this ID.\n";
+    }
+    
+    void displayDataset()
+    {
+        cout << "\n==============================================================\n";
+        cout << "                    COMPLETE ROUTE DATASET                    \n";
+        cout << "==============================================================\n";
+        cout << left << setw(10) << "RouteID" 
+             << setw(15) << "Origin" 
+             << setw(15) << "Destination" 
+             << setw(12) << "Dist(km)" 
+             << setw(10) << "Time(m)" << endl;
+        cout << "--------------------------------------------------------------\n";
+        
+        for (int i = 0; i < cap; i++) {
+            Route *r = stops[i].head;
+            while(r) {
+                cout << left << setw(10) << r->id 
+                     << setw(15) << stops[r->src].name 
+                     << setw(15) << stops[r->dest].name 
+                     << setw(12) << r->dist 
+                     << setw(10) << r->time << endl;
+                r = r->next;
+            }
+        }
+        cout << "==============================================================\n";
+    }
+
+    void benchmark() 
+{
+    cout << "\n========================================================================\n";
+    cout << "                    ALGORITHM PERFORMANCE BENCHMARK                     \n";
+    cout << "========================================================================\n";
+
+    Route *listM = 0;
+    int total = 0;
+    for (int i = 0; i < cap; i++) {
+        for (Route *e = stops[i].head; e; e = e->next) {
+            Route *temp = new Route;
+            *temp = *e;
+            temp->next = listM;
+            listM = temp;
+            total++;
+        }
+    }
+
+    if (!listM) {
+        cout << "Error: No routes available to benchmark.\n";
+        return;
+    }
+
+    Route *listQ = 0;
+    Route *curr = listM;
+    while(curr) {
+        Route *temp = new Route;
+        *temp = *curr;
+        temp->next = listQ;
+        listQ = temp;
+        curr = curr->next;
+    }
+
+    opsMerge = 0;
+    auto s1 = high_resolution_clock::now();
+    Route *sortedM = mergeSort(listM, 2);
+    auto e1 = high_resolution_clock::now();
+    auto dMerge = duration_cast<microseconds>(e1 - s1);
+    long long resM = opsMerge;
+
+    opsQuick = 0;
+    auto s2 = high_resolution_clock::now();
+    Route *sortedQ = quickSort(listQ, 2);
+    auto e2 = high_resolution_clock::now();
+    auto dQuick = duration_cast<microseconds>(e2 - s2);
+    long long resQ = opsQuick;
+
+    opsDijkstra = 0;
+    auto s3 = high_resolution_clock::now();
+    dijkstra(0, (cap > 50 ? 50 : cap - 1), true);
+    auto e3 = high_resolution_clock::now();
+    auto dDij = duration_cast<microseconds>(e3 - s3);
+
+    opsDFS = 0;
+    auto s4 = high_resolution_clock::now();
+    discoverSilent(0, (cap > 10 ? 10 : cap - 1));
+    auto e4 = high_resolution_clock::now();
+    auto dDFS = duration_cast<microseconds>(e4 - s4);
+
+    cout << left << setw(20) << "Algorithm" 
+         << setw(15) << "Complexity" 
+         << setw(15) << "Operations" 
+         << setw(15) << "Time (us)" << endl;
+    cout << "------------------------------------------------------------------------\n";
+    cout << left << setw(20) << "Merge Sort" << setw(15) << "O(N log N)" << setw(15) << resM << setw(15) << dMerge.count() << endl;
+    cout << left << setw(20) << "Quick Sort" << setw(15) << "O(N log N)" << setw(15) << resQ << setw(15) << dQuick.count() << endl;
+    cout << left << setw(20) << "Dijkstra" << setw(15) << "O(E log V)" << setw(15) << opsDijkstra << setw(15) << dDij.count() << endl;
+    cout << left << setw(20) << "DFS Path" << setw(15) << "O(V + E)" << setw(15) << opsDFS << setw(15) << dDFS.count() << endl;
+    cout << "========================================================================\n";
+
+    while (sortedM) { Route *t = sortedM; sortedM = sortedM->next; delete t; }
+    while (sortedQ) { Route *t = sortedQ; sortedQ = sortedQ->next; delete t; }
+}
+
+    
+
+    void runtimeReport();
+
+    void enqueueReq(int s, int d) { req.enqueue(s, d); }
+    void processReq()
+    {
+        int s, d;
+        while (req.dequeue(s, d))
+            cout << "Processing Route " << s << " to " << d << ": Your seat has been booked.\n";
+    }
+};
+
+void BusSystem::rankRoutes(int crit, bool useQuick, int startID, int endID)
+{
+    if (startID > endID) swap(startID, endID);
+
+    Route *subset = nullptr;
+    for (int i = 0; i < cap; i++) {
+        for (Route *e = stops[i].head; e; e = e->next) {
+            if (e->id >= startID && e->id <= endID) {
+                Route *temp = new Route;
+                *temp = *e;
+                temp->next = subset;
+                subset = temp;
+            }
+        }
+    }
+
+    if (!subset) {
+        cout << "No routes found in range " << startID << " to " << endID << ".\n";
+        return;
+    }
+
+    subset = mergeSort(subset, crit); // or quickSort if useQuick==true
+
+    cout << "\nDetailed Route Report (Sorted by " << (crit == 2 ? "Distance" : "Popularity") << "):\n";
+    cout << left << setw(10) << "RouteID" << setw(12) << "Source" << setw(12) << "Dest" 
+         << setw(10) << "Dist" << setw(10) << "Popularity" << endl;
+
+    while (subset) {
+        cout << left << setw(10) << subset->id
+             << setw(12) << subset->src
+             << setw(12) << subset->dest
+             << setw(10) << subset->dist
+             << setw(10) << subset->popularity << endl;
+        Route *t = subset;
+        subset = subset->next;
+        delete t;
+    }
+}
+
+
+
+void load(BusSystem &b)
+{
+    for (int i = 0; i < 100; i++)
+    {
+        char n[10];
+        n[0] = 'S'; n[1] = 't'; n[2] = 'o'; n[3] = 'p'; 
+        n[4] = (char)('0' + (i/10)); n[5] = (char)('0' + (i%10)); n[6] = 0;
+        b.addStop(i, n);
+    }
+    for (int i = 0; i < 500; i++)
+        b.addRoute(1000 + i, i % 100, (i + 17) % 100, 5 + i % 7, 10 + i % 13, 0);
+}
+
+
+int main()
+{
+    BusSystem sys(150);
+    load(sys);
+
+    int role;
+    while (true)
+    {
+        cout << "\n=============================================\n";
+        cout << "        BUSNAV - INTELLIGENT BUS SYSTEM       \n";
+        cout << "=============================================\n";
+        cout << "1. Passenger Navigation Portal\n";
+        cout << "2. System Administration Panel\n";
+        cout << "3. Exit Application\n";
+        cout << "Enter Choice: ";
+    
+        cin >> role;
+
+        if (role == 3)
+        {
+            cout << "\nSystem shutting down. Safe travels.\n";
+            break;
+        }
+
+        if (role == 1)
+        {
+            int ch, u, v;
+            while (true)
+            {
+                cout << "\n---------------------------------------------\n";
+                cout << "        PASSENGER NAVIGATION MENU             \n";
+                cout << "---------------------------------------------\n";
+                cout << "1. Find Shortest Route (Simple Method)\n";
+                cout << "2. Find Reachable Routes (List Connections)\n";
+                cout << "3. Find Optimal Route (Dijkstra Algorithm)\n";
+                cout << "4. Explore All Possible Routes (Source & Dest)\n";
+                cout << "5. Submit Request to Book your seat\n";
+                cout << "6. Return to Main Menu\n";
+                cout << "Enter Option: ";
+                cin >> ch;
+
+                if (ch == 6)
+                    break;
+
+                if (ch == 2)
+                {
+                    cout << "Enter Source Stop ID: ";
+                    cin >> u;
+                    sys.reachability(u);
+                }
+                else if (ch == 4)
+                {
+                    cout << "Enter Source Stop ID: ";
+                    cin >> u;
+                    cout << "Enter Destination Stop ID: ";
+                    cin >> v;
+                    sys.discover(u, v);
+                }
+                else if (ch == 1 || ch == 3 || ch == 5)
+                {
+                    cout << "Enter Source Stop ID: ";
+                    cin >> u;
+                    cout << "Enter Destination Stop ID: ";
+                    cin >> v;
+                    if (ch == 1) sys.linearShortest(u, v);
+                    else if (ch == 3) sys.dijkstra(u, v);
+                    else { sys.enqueueReq(u, v); cout << "Request successfully queued.\n"; }
+                }
+            }
+        }
+
+        else if (role == 2)
+        {
+            string pin;
+            cout << "\nEnter Administrator PIN: ";
+            cin >> pin;
+            if (pin != "admin123")
+            {
+                cout << "Authentication failed. Access denied.\n";
+                continue;
+            }
+
+            int ch, id, u, v, m;
+            while (true)
+            {
+                cout << "\n=============================================\n";
+                cout << "           ADMINISTRATIVE CONTROL PANEL       \n";
+                cout << "=============================================\n";
+                cout << "1. Add New Route to Network\n";
+                cout << "2. Remove Existing Route\n";
+                cout << "3. Undo Last Operation\n";
+                cout << "4. Redo Last Reverted Operation\n";
+                cout << "5. View Complete Route Dataset\n";
+                cout << "6. Rank Routes (Complete Report)\n";
+                cout << "7. View Runtime & Algorithm Statistics\n";
+                cout << "8. Passenger Seats Booking Requests\n";
+                cout << "9. Logout to Main Menu\n";
+                cout << "Enter Option: ";
+                cin >> ch;
+
+                if (ch == 9)
+                    break;
+
+                if (ch == 1)
+                {
+                    cout << "Enter Route ID: "; cin >> id;
+                    cout << "Enter Source Stop ID: "; cin >> u;
+                    cout << "Enter Destination Stop ID: "; cin >> v;
+                    sys.addRoute(id, u, v, 5, 10);
+                }
+                else if (ch == 2)
+                {
+                    cout << "Enter Route ID to Remove: "; cin >> id;
+                    sys.removeRoute(id);
+                }
+                else if (ch == 3) sys.undo();
+                else if (ch == 4) sys.redo();
+                else if (ch == 5) sys.displayDataset();
+                else if (ch == 6)
+                {
+                    int start, end;
+                    cout << "Enter Start Route ID: "; cin >> start;
+                    cout << "Enter End Route ID: "; cin >> end;
+                    cout << "Sort by \n2.Distance \n3.Popularity: "; cin >> m;
+                    sys.rankRoutes(m, false, start, end);
+                }
+                else if (ch == 7) sys.benchmark();
+                else if (ch == 8) sys.processReq();
             }
         }
     }
