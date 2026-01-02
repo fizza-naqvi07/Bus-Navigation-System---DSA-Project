@@ -8,6 +8,7 @@ long long opsBFS = 0;
 #include <iostream>
 #include <iomanip>
 #include <chrono>
+#include <cstring>
 
 using namespace std;
 using namespace std::chrono;
@@ -227,20 +228,37 @@ class BusSystem
         p->next = r;
         return l;
     }
-    void dfsPath(int u, int d, bool *vis, int *path, int dep)
+    struct PathInfo { int *nodes; int len; double dist; double time; int popularity; PathInfo *next; };
+
+    void addPathResult(PathInfo *&res, int *path, int plen, double cd, double ct, int cp)
+    {
+        PathInfo *p = new PathInfo;
+        p->len = plen;
+        p->nodes = new int[plen];
+        for (int i = 0; i < plen; i++) p->nodes[i] = path[i];
+        p->dist = cd;
+        p->time = ct;
+        p->popularity = cp;
+        p->next = res;
+        res = p;
+    }
+
+    void dfsCollect(int u, int d, bool *vis, int *path, int plen, double cd, double ct, int cp, PathInfo *&res)
     {
         opsDFS++;
         vis[u] = 1;
-        path[dep] = u;
+        path[plen++] = u;
         if (u == d)
         {
+            addPathResult(res, path, plen, cd, ct, cp);
         }
-        else if (dep < 5)
+        else
         {
             for (Route *e = stops[u].head; e; e = e->next)
                 if (!vis[e->dest])
-                    dfsPath(e->dest, d, vis, path, dep + 1);
+                    dfsCollect(e->dest, d, vis, path, plen, cd + e->dist, ct + e->time, cp + e->popularity, res);
         }
+        plen--;
         vis[u] = 0;
     }
     void bfs(int s)
@@ -277,6 +295,9 @@ public:
             stops[i].head = 0;
         }
     }
+
+    void rankRoutes(int crit, bool useQuick, int startID, int endID);
+
     void addStop(int id, const char *n)
     {
         int i = 0;
@@ -397,28 +418,57 @@ public:
     void discover(int s, int d)
     {
         bool *vis = new bool[cap];
+        for (int i = 0; i < cap; i++) vis[i] = 0;
         int *path = new int[cap];
-        for (int i = 0; i < cap; i++)
-            vis[i] = 0;
-        dfsPath(s, d, vis, path, 0);
+        PathInfo *res = 0;
+        dfsCollect(s, d, vis, path, 0, 0.0, 0.0, 0, res);
+        if (!res)
+            cout << "No routes found between " << stops[s].name << " and " << stops[d].name << endl;
+        else
+        {
+            cout << "\nAll Possible Routes:\n";
+            cout << left << setw(6) << "#" << setw(40) << "Stops Sequence" << setw(12) << "Dist" << setw(12) << "Time" << setw(12) << "Popularity" << endl;
+            int idx = 1;
+            for (PathInfo *p = res; p; p = p->next)
+            {
+                cout << left << setw(6) << idx;
+                char seq[512]; seq[0] = '\0';
+                for (int j = 0; j < p->len; j++)
+                {
+                    if (j) strcat(seq, " -> ");
+                    strcat(seq, stops[p->nodes[j]].name);
+                }
+                cout << setw(40) << seq << setw(12) << p->dist << setw(12) << p->time << setw(12) << p->popularity << endl;
+                idx++;
+            }
+        }
+        for (PathInfo *p = res; p; ) { PathInfo *t = p; p = p->next; delete[] t->nodes; delete t; }
         delete[] vis;
         delete[] path;
     }
+
     void discoverSilent(int s, int d)
     {
         bool *vis = new bool[cap];
+        for (int i = 0; i < cap; i++) vis[i] = 0;
         int *path = new int[cap];
-        for (int i = 0; i < cap; i++)
-            vis[i] = 0;
-        dfsPath(s, d, vis, path, 0);
+        PathInfo *res = 0;
+        dfsCollect(s, d, vis, path, 0, 0.0, 0.0, 0, res);
+        for (PathInfo *p = res; p; ) { PathInfo *t = p; p = p->next; delete[] t->nodes; delete t; }
         delete[] vis;
         delete[] path;
     }
     void reachability(int s)
     {
-        opsBFS = 0;
-        bfs(s);
-        cout << "Reachable ops: " << opsBFS << endl;
+        cout << "\nRoutes connected to Stop " << s << " (" << stops[s].name << "):\n";
+        cout << left << setw(10) << "DestID" << setw(20) << "DestName" << setw(12) << "Dist" << setw(10) << "Time" << endl;
+        bool found = false;
+        for (Route *e = stops[s].head; e; e = e->next)
+        {
+            cout << left << setw(10) << e->dest << setw(20) << stops[e->dest].name << setw(12) << e->dist << setw(10) << e->time << endl;
+            found = true;
+        }
+        if (!found) cout << "No outgoing routes found from this ID.\n";
     }
     
     void displayDataset()
@@ -448,135 +498,132 @@ public:
     }
 
     void benchmark() 
-    {
-        cout << "\n========================================================================\n";
-        cout << "                    ALGORITHM PERFORMANCE BENCHMARK                     \n";
-        cout << "========================================================================\n";
-        
-        Route *list = 0;
-        for (int i = 0; i < cap; i++) {
-            Route *e = stops[i].head;
-            while (e) {
-                Route *temp = new Route;
-                *temp = *e;
-                temp->next = list;
-                list = temp;
-                e = e->next;
-            }
-        }
+{
+    cout << "\n========================================================================\n";
+    cout << "                    ALGORITHM PERFORMANCE BENCHMARK                     \n";
+    cout << "========================================================================\n";
 
-        opsMerge = 0;
-        Route *listM = list; 
-        Route *listQ = 0;
-        Route *curr = list;
-        while(curr) {
-            Route *temp = new Route; *temp = *curr; temp->next = listQ; listQ = temp; curr=curr->next;
-        }
-
-        auto start = high_resolution_clock::now();
-        mergeSort(listM, 2);
-        auto stop = high_resolution_clock::now();
-        auto durMerge = duration_cast<microseconds>(stop - start);
-        long long mRes = opsMerge;
-
-        opsQuick = 0;
-        start = high_resolution_clock::now();
-        quickSort(listQ, 2);
-        stop = high_resolution_clock::now();
-        auto durQuick = duration_cast<microseconds>(stop - start);
-        long long qRes = opsQuick;
-
-        start = high_resolution_clock::now();
-        dijkstra(0, 50, true); 
-        stop = high_resolution_clock::now();
-        auto durDij = duration_cast<microseconds>(stop - start);
-
-        start = high_resolution_clock::now();
-        discoverSilent(0, 10);
-        stop = high_resolution_clock::now();
-        auto durDFS = duration_cast<microseconds>(stop - start);
-
-        cout << left << setw(20) << "Algorithm" 
-             << setw(15) << "Complexity" 
-             << setw(15) << "Operations" 
-             << setw(15) << "Time (us)" << endl;
-        cout << "------------------------------------------------------------------------\n";
-        cout << left << setw(20) << "Merge Sort" << setw(15) << "O(N log N)" << setw(15) << mRes << setw(15) << durMerge.count() << endl;
-        cout << left << setw(20) << "Quick Sort" << setw(15) << "O(N log N)" << setw(15) << qRes << setw(15) << durQuick.count() << endl;
-        cout << left << setw(20) << "Dijkstra" << setw(15) << "O(E log V)" << setw(15) << opsDijkstra << setw(15) << durDij.count() << endl;
-        cout << left << setw(20) << "DFS Path" << setw(15) << "O(V + E)" << setw(15) << opsDFS << setw(15) << durDFS.count() << endl;
-        cout << "========================================================================\n";
-        while (listM) { Route *t = listM; listM = listM->next; delete t; }
-        while (listQ) { Route *t = listQ; listQ = listQ->next; delete t; }
-    }
-
-    void rankRoutes(int crit, bool useQuick)
-    {
-        Route *list = 0;
-        for (int i = 0; i < cap; i++)
-        {
-            Route *e = stops[i].head;
-            while (e)
-            {
-                Route *temp = new Route;
-                temp->id = e->id;
-                temp->src = e->src;
-                temp->dest = e->dest;
-                temp->dist = e->dist;
-                temp->time = e->time;
-                temp->popularity = e->popularity;
-                temp->next = list;
-                list = temp;
-                e = e->next;
-            }
-        }
-
-        opsMerge = 0;
-        opsQuick = 0;
-
-        if (useQuick)
-            list = quickSort(list, crit);
-        else
-            list = mergeSort(list, crit);
-
-        cout << "\nTop Ranked Routes:\n";
-        cout << left << setw(10) << "Rank" << setw(15) << "RouteID" << setw(10) << "Value" << endl;
-
-        int rank = 1;
-        Route *curr = list;
-        while (curr && rank <= 10)
-        {
-            cout << left << setw(10) << rank << setw(15) << curr->id;
-            if (crit == 2)
-                cout << setw(10) << curr->dist << endl;
-            else
-                cout << setw(10) << curr->popularity << endl;
-
-            curr = curr->next;
-            rank++;
-        }
-
-        while (list)
-        {
-            Route *t = list;
-            list = list->next;
-            delete t;
+    Route *listM = 0;
+    int total = 0;
+    for (int i = 0; i < cap; i++) {
+        for (Route *e = stops[i].head; e; e = e->next) {
+            Route *temp = new Route;
+            *temp = *e;
+            temp->next = listM;
+            listM = temp;
+            total++;
         }
     }
 
-    void runtimeReport()
-    {
-        benchmark();
+    if (!listM) {
+        cout << "Error: No routes available to benchmark.\n";
+        return;
     }
+
+    Route *listQ = 0;
+    Route *curr = listM;
+    while(curr) {
+        Route *temp = new Route;
+        *temp = *curr;
+        temp->next = listQ;
+        listQ = temp;
+        curr = curr->next;
+    }
+
+    opsMerge = 0;
+    auto s1 = high_resolution_clock::now();
+    Route *sortedM = mergeSort(listM, 2);
+    auto e1 = high_resolution_clock::now();
+    auto dMerge = duration_cast<microseconds>(e1 - s1);
+    long long resM = opsMerge;
+
+    opsQuick = 0;
+    auto s2 = high_resolution_clock::now();
+    Route *sortedQ = quickSort(listQ, 2);
+    auto e2 = high_resolution_clock::now();
+    auto dQuick = duration_cast<microseconds>(e2 - s2);
+    long long resQ = opsQuick;
+
+    opsDijkstra = 0;
+    auto s3 = high_resolution_clock::now();
+    dijkstra(0, (cap > 50 ? 50 : cap - 1), true);
+    auto e3 = high_resolution_clock::now();
+    auto dDij = duration_cast<microseconds>(e3 - s3);
+
+    opsDFS = 0;
+    auto s4 = high_resolution_clock::now();
+    discoverSilent(0, (cap > 10 ? 10 : cap - 1));
+    auto e4 = high_resolution_clock::now();
+    auto dDFS = duration_cast<microseconds>(e4 - s4);
+
+    cout << left << setw(20) << "Algorithm" 
+         << setw(15) << "Complexity" 
+         << setw(15) << "Operations" 
+         << setw(15) << "Time (us)" << endl;
+    cout << "------------------------------------------------------------------------\n";
+    cout << left << setw(20) << "Merge Sort" << setw(15) << "O(N log N)" << setw(15) << resM << setw(15) << dMerge.count() << endl;
+    cout << left << setw(20) << "Quick Sort" << setw(15) << "O(N log N)" << setw(15) << resQ << setw(15) << dQuick.count() << endl;
+    cout << left << setw(20) << "Dijkstra" << setw(15) << "O(E log V)" << setw(15) << opsDijkstra << setw(15) << dDij.count() << endl;
+    cout << left << setw(20) << "DFS Path" << setw(15) << "O(V + E)" << setw(15) << opsDFS << setw(15) << dDFS.count() << endl;
+    cout << "========================================================================\n";
+
+    while (sortedM) { Route *t = sortedM; sortedM = sortedM->next; delete t; }
+    while (sortedQ) { Route *t = sortedQ; sortedQ = sortedQ->next; delete t; }
+}
+
+    
+
+    void runtimeReport();
 
     void enqueueReq(int s, int d) { req.enqueue(s, d); }
     void processReq()
     {
         int s, d;
-        if (req.dequeue(s, d))
-            dijkstra(s, d);
+        while (req.dequeue(s, d))
+            cout << "Processing Route " << s << " to " << d << ": Your seat has been booked.\n";
     }
 };
+
+void BusSystem::rankRoutes(int crit, bool useQuick, int startID, int endID)
+{
+    if (startID > endID) swap(startID, endID);
+
+    Route *subset = nullptr;
+    for (int i = 0; i < cap; i++) {
+        for (Route *e = stops[i].head; e; e = e->next) {
+            if (e->id >= startID && e->id <= endID) {
+                Route *temp = new Route;
+                *temp = *e;
+                temp->next = subset;
+                subset = temp;
+            }
+        }
+    }
+
+    if (!subset) {
+        cout << "No routes found in range " << startID << " to " << endID << ".\n";
+        return;
+    }
+
+    subset = mergeSort(subset, crit); // or quickSort if useQuick==true
+
+    cout << "\nDetailed Route Report (Sorted by " << (crit == 2 ? "Distance" : "Popularity") << "):\n";
+    cout << left << setw(10) << "RouteID" << setw(12) << "Source" << setw(12) << "Dest" 
+         << setw(10) << "Dist" << setw(10) << "Popularity" << endl;
+
+    while (subset) {
+        cout << left << setw(10) << subset->id
+             << setw(12) << subset->src
+             << setw(12) << subset->dest
+             << setw(10) << subset->dist
+             << setw(10) << subset->popularity << endl;
+        Route *t = subset;
+        subset = subset->next;
+        delete t;
+    }
+}
+
+
 
 void load(BusSystem &b)
 {
@@ -590,6 +637,11 @@ void load(BusSystem &b)
     for (int i = 0; i < 500; i++)
         b.addRoute(1000 + i, i % 100, (i + 17) % 100, 5 + i % 7, 10 + i % 13, 0);
 }
+
+void runtimeReport()
+    {
+        benchmark();
+    }
 
 int main()
 {
@@ -606,6 +658,7 @@ int main()
         cout << "2. System Administration Panel\n";
         cout << "3. Exit Application\n";
         cout << "Enter Choice: ";
+    
         cin >> role;
 
         if (role == 3)
@@ -623,10 +676,10 @@ int main()
                 cout << "        PASSENGER NAVIGATION MENU             \n";
                 cout << "---------------------------------------------\n";
                 cout << "1. Find Shortest Route (Simple Method)\n";
-                cout << "2. Find Reachable Stops (Connectivity Check)\n";
+                cout << "2. Find Reachable Routes (List Connections)\n";
                 cout << "3. Find Optimal Route (Dijkstra Algorithm)\n";
-                cout << "4. Explore All Possible Routes (DFS)\n";
-                cout << "5. Submit Route Request for Processing\n";
+                cout << "4. Explore All Possible Routes (Source & Dest)\n";
+                cout << "5. Submit Request to Book your seat\n";
                 cout << "6. Return to Main Menu\n";
                 cout << "Enter Option: ";
                 cin >> ch;
@@ -634,44 +687,29 @@ int main()
                 if (ch == 6)
                     break;
 
-                if (ch >= 1 && ch <= 4)
+                if (ch == 2)
                 {
-                    cout << "Enter Source Stop ID: ";
-                    cin >> u;
-                    cout << "Enter Destination Stop ID: ";
-                    cin >> v;
-                }
-
-                if (ch == 1)
-                {
-                    cout << "\n[Processing Simple Shortest Route]\n";
-                    sys.linearShortest(u, v);
-                }
-                else if (ch == 2)
-                {
-                    cout << "\n[Checking Network Reachability]\n";
                     cout << "Enter Source Stop ID: ";
                     cin >> u;
                     sys.reachability(u);
                 }
-                else if (ch == 3)
-                {
-                    cout << "\n[Running Dijkstra's Optimized Routing]\n";
-                    sys.dijkstra(u, v);
-                }
                 else if (ch == 4)
-                {
-                    cout << "\n[Discovering All Valid Routes]\n";
-                    sys.discover(u, v);
-                }
-                else if (ch == 5)
                 {
                     cout << "Enter Source Stop ID: ";
                     cin >> u;
                     cout << "Enter Destination Stop ID: ";
                     cin >> v;
-                    sys.enqueueReq(u, v);
-                    cout << "Request successfully queued for admin processing.\n";
+                    sys.discover(u, v);
+                }
+                else if (ch == 1 || ch == 3 || ch == 5)
+                {
+                    cout << "Enter Source Stop ID: ";
+                    cin >> u;
+                    cout << "Enter Destination Stop ID: ";
+                    cin >> v;
+                    if (ch == 1) sys.linearShortest(u, v);
+                    else if (ch == 3) sys.dijkstra(u, v);
+                    else { sys.enqueueReq(u, v); cout << "Request successfully queued.\n"; }
                 }
             }
         }
@@ -698,73 +736,41 @@ int main()
                 cout << "3. Undo Last Operation\n";
                 cout << "4. Redo Last Reverted Operation\n";
                 cout << "5. View Complete Route Dataset\n";
-                cout << "6. Rank Routes (Sorting & Analysis)\n";
+                cout << "6. Rank Routes (Complete Report)\n";
                 cout << "7. View Runtime & Algorithm Statistics\n";
-                cout << "8. Process Passenger Route Requests\n";
+                cout << "8. Passenger Seats Booking Requests\n";
                 cout << "9. Logout to Main Menu\n";
                 cout << "Enter Option: ";
                 cin >> ch;
 
                 if (ch == 9)
-                {
-                    cout << "Logging out from admin panel.\n";
                     break;
-                }
 
                 if (ch == 1)
                 {
-                    cout << "Enter Route ID: ";
-                    cin >> id;
-                    cout << "Enter Source Stop ID: ";
-                    cin >> u;
-                    cout << "Enter Destination Stop ID: ";
-                    cin >> v;
+                    cout << "Enter Route ID: "; cin >> id;
+                    cout << "Enter Source Stop ID: "; cin >> u;
+                    cout << "Enter Destination Stop ID: "; cin >> v;
                     sys.addRoute(id, u, v, 5, 10);
-                    cout << "Route successfully added to network.\n";
                 }
                 else if (ch == 2)
                 {
-                    cout << "Enter Route ID to Remove: ";
-                    cin >> id;
+                    cout << "Enter Route ID to Remove: "; cin >> id;
                     sys.removeRoute(id);
-                    cout << "Route removed from network.\n";
                 }
-                else if (ch == 3)
-                {
-                    sys.undo();
-                    cout << "Undo operation executed.\n";
-                }
-                else if (ch == 4)
-                {
-                    sys.redo();
-                    cout << "Redo operation executed.\n";
-                }
-                else if (ch == 5)
-                {
-                    sys.displayDataset();
-                }
+                else if (ch == 3) sys.undo();
+                else if (ch == 4) sys.redo();
+                else if (ch == 5) sys.displayDataset();
                 else if (ch == 6)
                 {
-                    cout << "Select Ranking Mode:\n";
-                    cout << "2. Sort by Distance\n";
-                    cout << "3. Sort by Popularity\n";
-                    cout << "Enter Choice: ";
-                    cin >> m;
-                    sys.rankRoutes(m, m == 3);
+                    int start, end;
+                    cout << "Enter Start Route ID: "; cin >> start;
+                    cout << "Enter End Route ID: "; cin >> end;
+                    cout << "Sort by \n2.Distance \n3.Popularity: "; cin >> m;
+                    sys.rankRoutes(m, false, start, end);
                 }
-                else if (ch == 7)
-                {
-                    sys.benchmark();
-                }
-                else if (ch == 8)
-                {
-                    cout << "Processing queued passenger requests...\n";
-                    sys.processReq();
-                }
-                else
-                {
-                    cout << "Invalid administrative option.\n";
-                }
+                else if (ch == 7) sys.benchmark();
+                else if (ch == 8) sys.processReq();
             }
         }
     }
